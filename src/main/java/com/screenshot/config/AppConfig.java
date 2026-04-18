@@ -42,6 +42,14 @@ public class AppConfig {
     @JsonProperty("image_format")
     private ImageFormat imageFormat = ImageFormat.PNG;
 
+    /** 是否启用每日自动归档，默认启用 */
+    @JsonProperty("archive_enabled")
+    private boolean archiveEnabled = true;
+
+    /** 每日归档执行时间（HH:mm格式），默认凌晨00:30 */
+    @JsonProperty("archive_time")
+    private String archiveTime = "00:30";
+
     /** 是否正在运行（运行时状态，不持久化） */
     private transient boolean running = false;
 
@@ -166,6 +174,42 @@ public class AppConfig {
     }
 
     /**
+     * 是否启用每日自动归档
+     *
+     * @return 是否启用
+     */
+    public boolean isArchiveEnabled() {
+        return archiveEnabled;
+    }
+
+    /**
+     * 设置是否启用每日自动归档
+     *
+     * @param archiveEnabled 是否启用
+     */
+    public void setArchiveEnabled(boolean archiveEnabled) {
+        this.archiveEnabled = archiveEnabled;
+    }
+
+    /**
+     * 获取每日归档执行时间（HH:mm格式）
+     *
+     * @return 时间字符串，如 "00:30"
+     */
+    public String getArchiveTime() {
+        return archiveTime;
+    }
+
+    /**
+     * 设置每日归档执行时间
+     *
+     * @param archiveTime 时间字符串（HH:mm格式）
+     */
+    public void setArchiveTime(String archiveTime) {
+        this.archiveTime = archiveTime;
+    }
+
+    /**
      * 获取运行状态
      *
      * @return 是否正在运行
@@ -220,6 +264,11 @@ public class AppConfig {
         if (imageFormat == null) {
             throw new ConfigException("图片格式不能为空");
         }
+
+        // 验证归档时间格式
+        if (archiveTime != null && !archiveTime.matches("^([01]\\d|2[0-3]):([0-5]\\d)$")) {
+            throw new ConfigException("无效的归档时间格式: " + archiveTime + "，应为HH:mm格式，如 00:30");
+        }
     }
 
     @Override
@@ -230,6 +279,8 @@ public class AppConfig {
                 ", idleThreshold=" + idleThreshold +
                 ", savePath='" + savePath + '\'' +
                 ", imageFormat=" + imageFormat +
+                ", archiveEnabled=" + archiveEnabled +
+                ", archiveTime='" + archiveTime + '\'' +
                 ", running=" + running +
                 '}';
     }

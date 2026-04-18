@@ -29,6 +29,8 @@ public class SettingsDialog extends JDialog {
     private JTextField idleThresholdField;
     private JTextField pathField;
     private JComboBox<String> formatCombo;
+    private JCheckBox archiveEnabledCheckbox;
+    private JTextField archiveTimeField;
     private JButton browseButton;
     private JButton saveButton;
     private JButton cancelButton;
@@ -46,7 +48,7 @@ public class SettingsDialog extends JDialog {
         initializeUI();
         loadConfig();
 
-        setSize(550, 400);
+        setSize(550, 480);
         setLocationRelativeTo(parent);
         setResizable(false);
     }
@@ -197,6 +199,56 @@ public class SettingsDialog extends JDialog {
         formatCombo = new JComboBox<>(new String[]{"PNG", "JPG", "BMP"});
         formPanel.add(formatCombo, gbc);
 
+        row++;
+
+        // ===== 归档设置分隔线 =====
+        gbc.gridx = 0;
+        gbc.gridy = row;
+        gbc.gridwidth = 3;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        formPanel.add(new JSeparator(), gbc);
+
+        row++;
+
+        // 归档设置标题
+        gbc.gridx = 0;
+        gbc.gridy = row;
+        gbc.gridwidth = 3;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        JLabel archiveTitle = new JLabel("每日归档设置");
+        archiveTitle.setFont(archiveTitle.getFont().deriveFont(Font.BOLD));
+        formPanel.add(archiveTitle, gbc);
+
+        row++;
+
+        // 启用归档
+        gbc.gridwidth = 3;
+        gbc.gridx = 0;
+        gbc.gridy = row;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        archiveEnabledCheckbox = new JCheckBox("启用每日自动归档（将前一天截图移入日期子目录）");
+        formPanel.add(archiveEnabledCheckbox, gbc);
+
+        row++;
+
+        // 归档时间
+        gbc.gridwidth = 1;
+        gbc.gridx = 0;
+        gbc.gridy = row;
+        gbc.fill = GridBagConstraints.NONE;
+        formPanel.add(new JLabel("归档执行时间:"), gbc);
+
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        archiveTimeField = new JTextField(15);
+        formPanel.add(archiveTimeField, gbc);
+
+        gbc.gridx = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        formPanel.add(new JLabel("(HH:mm)"), gbc);
+
         mainPanel.add(formPanel, BorderLayout.CENTER);
 
         // 按钮面板
@@ -235,6 +287,8 @@ public class SettingsDialog extends JDialog {
         idleThresholdField.setText(String.valueOf(config.getIdleThreshold()));
         pathField.setText(config.getSavePath());
         formatCombo.setSelectedItem(config.getImageFormat().name());
+        archiveEnabledCheckbox.setSelected(config.isArchiveEnabled());
+        archiveTimeField.setText(config.getArchiveTime());
     }
 
     /**
@@ -323,6 +377,17 @@ public class SettingsDialog extends JDialog {
             config.setIdleThreshold(idleThreshold);
             config.setSavePath(path);
             config.setImageFormat(ImageFormat.valueOf((String) formatCombo.getSelectedItem()));
+            config.setArchiveEnabled(archiveEnabledCheckbox.isSelected());
+
+            String archiveTime = archiveTimeField.getText().trim();
+            if (!archiveTime.matches("^([01]\\d|2[0-3]):([0-5]\\d)$")) {
+                JOptionPane.showMessageDialog(this,
+                    "归档时间格式错误，应为HH:mm格式，如 00:30",
+                    "输入错误",
+                    JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            config.setArchiveTime(archiveTime);
 
             saved = true;
             dispose();

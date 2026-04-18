@@ -5,6 +5,7 @@ import com.screenshot.config.ConfigManager;
 import com.screenshot.exception.ControllerException;
 import com.screenshot.exception.ScreenshotException;
 import com.screenshot.engine.ScreenshotEngine;
+import com.screenshot.scheduler.Archiver;
 import com.screenshot.scheduler.Scheduler;
 import com.screenshot.tray.TrayManager;
 import com.screenshot.ui.SettingsDialog;
@@ -13,13 +14,23 @@ import org.slf4j.LoggerFactory;
 
 import javax.swing.*;
 import java.nio.file.Paths;
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 核心控制器
  * 负责协调各模块工作，管理应用状态
  *
  * @author wsj
- * @version 2.0.0
+ * @version 2.1.0
  */
 public class Controller implements TrayManager.TrayCallback {
     private static final Logger logger = LoggerFactory.getLogger(Controller.class);
@@ -30,34 +41,35 @@ public class Controller implements TrayManager.TrayCallback {
     private ScreenshotEngine screenshotEngine;
     private TrayManager trayManager;
 
+    /** 归档相关 */
+    private Archiver archiver;
+    private ScheduledExecutorService archiveExecutor;
+    private ScheduledFuture<?> archiveFuture;
+
     /**
      * 创建控制器
-     *
-     * @throws ControllerException 创建失败时抛出异常
      */
     public Controller() throws ControllerException {
         try {
             logger.info("初始化控制器");
 
-            // 初始化配置管理器
             configManager = new ConfigManager(Paths.get("config.json"));
-
-            // 初始化应用状态
             state = new AppState(configManager.getConfig());
 
-            // 初始化截图引擎
             screenshotEngine = new ScreenshotEngine(
                 Paths.get(state.getConfig().getSavePath()),
                 state.getConfig().getImageFormat()
             );
 
-            // 初始化调度器（三参数：空闲间隔、忙碌间隔、空闲阈值）
             AppConfig config = state.getConfig();
             scheduler = new Scheduler(
                 config.getIdleInterval(),
                 config.getBusyInterval(),
                 config.getIdleThreshold()
             );
+
+            archiver = new Archiver();
+            archiveExecutor = Executors.newSingleThreadScheduledExecutor();
 
             logger.info("控制器初始化成功");
 
@@ -79,7 +91,6 @@ public class Controller implements TrayManager.TrayCallback {
         logger.info("启动截图功能（事件驱动模式）");
         state.setRunning(true);
 
-        // 启动定时任务
         scheduler.start(new Runnable() {
             @Override
             public void run() {
@@ -87,13 +98,14 @@ public class Controller implements TrayManager.TrayCallback {
                     logger.debug("执行定时截图");
                     screenshotEngine.capture();
                 } catch (ScreenshotException e) {
-                    // 静默记录错误，继续运行
                     logger.error("截图失败: {}", e.getMessage());
                 }
             }
         });
 
-        // 更新托盘状态
+        // 启动每日归档定时任务
+        startArchiveTask();
+
         if (trayManager != null) {
             trayManager.updateMenuState(true);
         }
@@ -111,18 +123,87 @@ public class Controller implements TrayManager.TrayCallback {
         logger.info("停止截图功能");
         state.setRunning(false);
         scheduler.stop();
+        stopArchiveTask();
 
-        // 更新托盘状态
         if (trayManager != null) {
             trayManager.updateMenuState(false);
         }
     }
 
+    // ========== 归档任务管理 ==========
+
+    /**
+     * 启动每日归档定时任务
+     * 计算从现在到下次归档时间的延迟，然后每24小时执行一次
+     */
+    private void startArchiveTask() {
+        stopArchiveTask();
+
+        AppConfig config = state.getConfig();
+        if (!config.isArchiveEnabled()) {
+            logger.info("每日归档已禁用");
+            return;
+        }
+
+        // 计算到下次归档时间的延迟
+        long delaySeconds = calculateDelayToNextArchiveTime(config.getArchiveTime());
+
+        logger.info("启动每日归档任务，归档时间: {}，距下次执行: {}秒（约{}小时）",
+                config.getArchiveTime(), delaySeconds, delaySeconds / 3600);
+
+        archiveFuture = archiveExecutor.scheduleAtFixedRate(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    logger.info("执行每日归档任务");
+                    int count = archiver.archive(Paths.get(state.getConfig().getSavePath()));
+                    logger.info("归档完成，处理文件数: {}", count);
+                } catch (Exception e) {
+                    logger.error("归档任务执行异常", e);
+                }
+            }
+        }, delaySeconds, 24 * 3600, TimeUnit.SECONDS);
+    }
+
+    /**
+     * 停止归档定时任务
+     */
+    private void stopArchiveTask() {
+        if (archiveFuture != null) {
+            archiveFuture.cancel(false);
+            archiveFuture = null;
+        }
+    }
+
+    /**
+     * 计算从现在到下次归档时间的延迟（秒）
+     * 如果今天的归档时间已过，则延迟到明天同一时间
+     *
+     * @param archiveTimeStr HH:mm 格式的时间字符串
+     * @return 延迟秒数
+     */
+    private long calculateDelayToNextArchiveTime(String archiveTimeStr) {
+        try {
+            LocalTime archiveTime = LocalTime.parse(archiveTimeStr, DateTimeFormatter.ofPattern("HH:mm"));
+            LocalDateTime now = LocalDateTime.now();
+            LocalDateTime nextRun = LocalDateTime.of(LocalDate.now(), archiveTime);
+
+            // 如果今天的归档时间已过，设为明天
+            if (!nextRun.isAfter(now)) {
+                nextRun = nextRun.plusDays(1);
+            }
+
+            return Duration.between(now, nextRun).getSeconds();
+        } catch (DateTimeParseException e) {
+            logger.warn("归档时间格式错误: {}，使用默认00:30", archiveTimeStr);
+            return calculateDelayToNextArchiveTime("00:30");
+        }
+    }
+
+    // ========== 配置管理 ==========
+
     /**
      * 更新配置
-     *
-     * @param newConfig 新配置
-     * @throws ControllerException 更新失败时抛出异常
      */
     public void updateConfig(AppConfig newConfig) throws ControllerException {
         try {
@@ -130,16 +211,19 @@ public class Controller implements TrayManager.TrayCallback {
             configManager.updateConfig(newConfig);
             state.setConfig(newConfig);
 
-            // 更新截图引擎
             screenshotEngine.setSavePath(Paths.get(newConfig.getSavePath()));
             screenshotEngine.setImageFormat(newConfig.getImageFormat());
 
-            // 更新调度器配置（间隔和阈值，动态生效无需重启）
             scheduler.setConfig(
                 newConfig.getIdleInterval(),
                 newConfig.getBusyInterval(),
                 newConfig.getIdleThreshold()
             );
+
+            // 如果正在运行，重启归档任务以应用新配置
+            if (state.isRunning()) {
+                startArchiveTask();
+            }
 
         } catch (Exception e) {
             logger.error("配置更新失败", e);
@@ -154,24 +238,22 @@ public class Controller implements TrayManager.TrayCallback {
         logger.info("打开设置界面");
 
         try {
-            // 创建配置副本
             AppConfig configCopy = new AppConfig();
             configCopy.setIdleInterval(state.getConfig().getIdleInterval());
             configCopy.setBusyInterval(state.getConfig().getBusyInterval());
             configCopy.setIdleThreshold(state.getConfig().getIdleThreshold());
             configCopy.setSavePath(state.getConfig().getSavePath());
             configCopy.setImageFormat(state.getConfig().getImageFormat());
+            configCopy.setArchiveEnabled(state.getConfig().isArchiveEnabled());
+            configCopy.setArchiveTime(state.getConfig().getArchiveTime());
 
-            // 显示设置对话框
             SettingsDialog dialog = new SettingsDialog(null, configCopy);
             dialog.setVisible(true);
 
-            // 如果用户保存了配置
             if (dialog.isSaved()) {
                 updateConfig(dialog.getConfig());
                 logger.info("配置已更新");
 
-                // 显示成功提示
                 JOptionPane.showMessageDialog(null,
                     "配置已保存",
                     "成功",
@@ -192,36 +274,32 @@ public class Controller implements TrayManager.TrayCallback {
      */
     public void exit() {
         logger.info("退出程序");
-
-        // 停止截图
         stopCapture();
-
-        // 关闭调度器
         scheduler.shutdown();
 
-        // 移除托盘图标
+        // 关闭归档调度器
+        stopArchiveTask();
+        archiveExecutor.shutdown();
+        try {
+            if (!archiveExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                archiveExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            archiveExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+
         if (trayManager != null) {
             trayManager.remove();
         }
 
-        // 退出
         System.exit(0);
     }
 
-    /**
-     * 设置托盘管理器
-     *
-     * @param trayManager 托盘管理器
-     */
     public void setTrayManager(TrayManager trayManager) {
         this.trayManager = trayManager;
     }
 
-    /**
-     * 获取当前状态
-     *
-     * @return 应用状态
-     */
     public AppState getState() {
         return state;
     }
@@ -229,22 +307,14 @@ public class Controller implements TrayManager.TrayCallback {
     // ========== TrayCallback接口实现 ==========
 
     @Override
-    public void onStart() {
-        startCapture();
-    }
+    public void onStart() { startCapture(); }
 
     @Override
-    public void onStop() {
-        stopCapture();
-    }
+    public void onStop() { stopCapture(); }
 
     @Override
-    public void onSettings() {
-        openSettings();
-    }
+    public void onSettings() { openSettings(); }
 
     @Override
-    public void onExit() {
-        exit();
-    }
+    public void onExit() { exit(); }
 }
