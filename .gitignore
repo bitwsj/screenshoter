@@ -1,0 +1,37 @@
+# Maven 构建输出
+target/
+
+# IDE 文件
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.settings/
+.classpath
+.project
+.factorypath
+
+# 构建产物
+dependency-reduced-pom.xml
+
+# 运行时生成的文件
+config.json
+screenshoter.log
+screenshots/
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 临时文件
+*.tmp
+*.bak
+*.swp
+*~
+
+# AI 辅助工具目录
+.codeartsdoer/
+.spec-workflow/
+prompts.txt
