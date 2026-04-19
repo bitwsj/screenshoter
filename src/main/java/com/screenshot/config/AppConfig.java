@@ -3,6 +3,7 @@ package com.screenshot.config;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.screenshot.exception.ConfigException;
+import com.screenshot.hotkey.GlobalHotkeyManager;
 import com.screenshot.scheduler.UserActivityMonitor;
 
 import java.io.File;
@@ -49,6 +50,14 @@ public class AppConfig {
     /** 每日归档执行时间（HH:mm格式），默认凌晨00:30 */
     @JsonProperty("archive_time")
     private String archiveTime = "00:30";
+
+    /** 是否启用全局热键手动截图，默认启用 */
+    @JsonProperty("hotkey_enabled")
+    private boolean hotkeyEnabled = true;
+
+    /** 全局热键组合，格式如 "Ctrl+Alt+S"，默认 Ctrl+Alt+S */
+    @JsonProperty("hotkey")
+    private String hotkey = "Ctrl+Alt+S";
 
     /** 是否正在运行（运行时状态，不持久化） */
     private transient boolean running = false;
@@ -210,6 +219,42 @@ public class AppConfig {
     }
 
     /**
+     * 是否启用全局热键手动截图
+     *
+     * @return 是否启用
+     */
+    public boolean isHotkeyEnabled() {
+        return hotkeyEnabled;
+    }
+
+    /**
+     * 设置是否启用全局热键手动截图
+     *
+     * @param hotkeyEnabled 是否启用
+     */
+    public void setHotkeyEnabled(boolean hotkeyEnabled) {
+        this.hotkeyEnabled = hotkeyEnabled;
+    }
+
+    /**
+     * 获取全局热键组合字符串
+     *
+     * @return 热键字符串，如 "Ctrl+Alt+S"
+     */
+    public String getHotkey() {
+        return hotkey;
+    }
+
+    /**
+     * 设置全局热键组合字符串
+     *
+     * @param hotkey 热键字符串，如 "Ctrl+Alt+S"
+     */
+    public void setHotkey(String hotkey) {
+        this.hotkey = hotkey;
+    }
+
+    /**
      * 获取运行状态
      *
      * @return 是否正在运行
@@ -269,6 +314,17 @@ public class AppConfig {
         if (archiveTime != null && !archiveTime.matches("^([01]\\d|2[0-3]):([0-5]\\d)$")) {
             throw new ConfigException("无效的归档时间格式: " + archiveTime + "，应为HH:mm格式，如 00:30");
         }
+
+        // 验证热键配置
+        if (hotkeyEnabled) {
+            if (hotkey == null || hotkey.trim().isEmpty()) {
+                throw new ConfigException("启用热键时，快捷键不能为空");
+            }
+            if (GlobalHotkeyManager.parseHotkey(hotkey) == null) {
+                throw new ConfigException("无效的快捷键格式: " + hotkey
+                    + "，应为 \"修饰键+按键\" 格式，如 Ctrl+Alt+S（支持 Ctrl/Alt/Shift/Win + A-Z/0-9/F1-F12）");
+            }
+        }
     }
 
     @Override
@@ -281,6 +337,8 @@ public class AppConfig {
                 ", imageFormat=" + imageFormat +
                 ", archiveEnabled=" + archiveEnabled +
                 ", archiveTime='" + archiveTime + '\'' +
+                ", hotkeyEnabled=" + hotkeyEnabled +
+                ", hotkey='" + hotkey + '\'' +
                 ", running=" + running +
                 '}';
     }

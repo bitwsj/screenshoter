@@ -2,11 +2,14 @@ package com.screenshot.ui;
 
 import com.screenshot.config.AppConfig;
 import com.screenshot.config.ImageFormat;
+import com.screenshot.hotkey.GlobalHotkeyManager;
 
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -31,6 +34,9 @@ public class SettingsDialog extends JDialog {
     private JComboBox<String> formatCombo;
     private JCheckBox archiveEnabledCheckbox;
     private JTextField archiveTimeField;
+    private JCheckBox hotkeyEnabledCheckbox;
+    private JTextField hotkeyField;
+    private JButton hotkeyCaptureButton;
     private JButton browseButton;
     private JButton saveButton;
     private JButton cancelButton;
@@ -48,7 +54,7 @@ public class SettingsDialog extends JDialog {
         initializeUI();
         loadConfig();
 
-        setSize(550, 480);
+        setSize(550, 620);
         setLocationRelativeTo(parent);
         setResizable(false);
     }
@@ -201,6 +207,63 @@ public class SettingsDialog extends JDialog {
 
         row++;
 
+        // ===== 快捷键设置分隔线 =====
+        gbc.gridx = 0;
+        gbc.gridy = row;
+        gbc.gridwidth = 3;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        formPanel.add(new JSeparator(), gbc);
+
+        row++;
+
+        // 快捷键设置标题
+        gbc.gridx = 0;
+        gbc.gridy = row;
+        gbc.gridwidth = 3;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        JLabel hotkeyTitle = new JLabel("快捷键设置");
+        hotkeyTitle.setFont(hotkeyTitle.getFont().deriveFont(Font.BOLD));
+        formPanel.add(hotkeyTitle, gbc);
+
+        row++;
+
+        // 启用快捷键
+        gbc.gridwidth = 3;
+        gbc.gridx = 0;
+        gbc.gridy = row;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        hotkeyEnabledCheckbox = new JCheckBox("启用全局快捷键手动截图（任何状态下按快捷键立即截图）");
+        formPanel.add(hotkeyEnabledCheckbox, gbc);
+
+        row++;
+
+        // 快捷键组合
+        gbc.gridwidth = 1;
+        gbc.gridx = 0;
+        gbc.gridy = row;
+        gbc.fill = GridBagConstraints.NONE;
+        formPanel.add(new JLabel("快捷键:"), gbc);
+
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        hotkeyField = new JTextField(15);
+        formPanel.add(hotkeyField, gbc);
+
+        gbc.gridx = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        hotkeyCaptureButton = new JButton("录制...");
+        hotkeyCaptureButton.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                showHotkeyCapture();
+            }
+        });
+        formPanel.add(hotkeyCaptureButton, gbc);
+
+        row++;
+
         // ===== 归档设置分隔线 =====
         gbc.gridx = 0;
         gbc.gridy = row;
@@ -287,6 +350,8 @@ public class SettingsDialog extends JDialog {
         idleThresholdField.setText(String.valueOf(config.getIdleThreshold()));
         pathField.setText(config.getSavePath());
         formatCombo.setSelectedItem(config.getImageFormat().name());
+        hotkeyEnabledCheckbox.setSelected(config.isHotkeyEnabled());
+        hotkeyField.setText(config.getHotkey());
         archiveEnabledCheckbox.setSelected(config.isArchiveEnabled());
         archiveTimeField.setText(config.getArchiveTime());
     }
@@ -379,6 +444,31 @@ public class SettingsDialog extends JDialog {
             config.setImageFormat(ImageFormat.valueOf((String) formatCombo.getSelectedItem()));
             config.setArchiveEnabled(archiveEnabledCheckbox.isSelected());
 
+            // 验证并设置热键
+            boolean hotkeyEnabled = hotkeyEnabledCheckbox.isSelected();
+            String hotkey = hotkeyField.getText().trim();
+            if (hotkeyEnabled) {
+                if (hotkey.isEmpty()) {
+                    JOptionPane.showMessageDialog(this,
+                        "启用快捷键时，快捷键不能为空",
+                        "输入错误",
+                        JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                if (GlobalHotkeyManager.parseHotkey(hotkey) == null) {
+                    JOptionPane.showMessageDialog(this,
+                        "无效的快捷键格式: " + hotkey
+                            + "\n应为 \"修饰键+按键\" 格式，如 Ctrl+Alt+S"
+                            + "\n支持的修饰键: Ctrl, Alt, Shift, Win"
+                            + "\n支持的按键: A-Z, 0-9, F1-F12",
+                        "输入错误",
+                        JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+            }
+            config.setHotkeyEnabled(hotkeyEnabled);
+            config.setHotkey(hotkey);
+
             String archiveTime = archiveTimeField.getText().trim();
             if (!archiveTime.matches("^([01]\\d|2[0-3]):([0-5]\\d)$")) {
                 JOptionPane.showMessageDialog(this,
@@ -403,6 +493,108 @@ public class SettingsDialog extends JDialog {
                 "错误",
                 JOptionPane.ERROR_MESSAGE);
         }
+    }
+
+    /**
+     * 显示热键录制对话框
+     * 用户按下组合键后自动填入文本框，按 Esc 取消
+     */
+    private void showHotkeyCapture() {
+        final JDialog captureDialog = new JDialog(this, "录制快捷键", true);
+        captureDialog.setLayout(new BorderLayout(10, 10));
+        captureDialog.setSize(380, 130);
+        captureDialog.setLocationRelativeTo(this);
+        captureDialog.setResizable(false);
+
+        JLabel label = new JLabel("请按下快捷键组合（如 Ctrl+Alt+S），按 Esc 取消", SwingConstants.CENTER);
+        captureDialog.add(label, BorderLayout.CENTER);
+
+        JPanel bottomPanel = new JPanel();
+        JButton cancelButton = new JButton("取消");
+        cancelButton.setFocusable(false);
+        cancelButton.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                captureDialog.dispose();
+            }
+        });
+        bottomPanel.add(cancelButton);
+        captureDialog.add(bottomPanel, BorderLayout.SOUTH);
+
+        // 使用 KeyEventDispatcher 拦截所有键盘事件（比 KeyListener 更可靠）
+        final java.awt.KeyboardFocusManager kfm =
+                java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager();
+        final java.awt.KeyEventDispatcher dispatcher = new java.awt.KeyEventDispatcher() {
+            private boolean consumed = false;
+
+            @Override
+            public boolean dispatchKeyEvent(KeyEvent e) {
+                if (e.getID() != KeyEvent.KEY_PRESSED) {
+                    return false;
+                }
+
+                int code = e.getKeyCode();
+
+                // Esc 取消录制
+                if (code == KeyEvent.VK_ESCAPE) {
+                    cleanup();
+                    captureDialog.dispose();
+                    return true;
+                }
+
+                // 忽略纯修饰键按下
+                if (code == KeyEvent.VK_CONTROL || code == KeyEvent.VK_ALT
+                        || code == KeyEvent.VK_SHIFT || code == KeyEvent.VK_META) {
+                    return false;
+                }
+
+                if (consumed) {
+                    return true;
+                }
+                consumed = true;
+
+                // 构建热键字符串
+                StringBuilder sb = new StringBuilder();
+                if (e.isControlDown()) {
+                    sb.append("Ctrl+");
+                }
+                if (e.isAltDown()) {
+                    sb.append("Alt+");
+                }
+                if (e.isShiftDown()) {
+                    sb.append("Shift+");
+                }
+                sb.append(KeyEvent.getKeyText(code));
+
+                final String hotkey = sb.toString();
+                SwingUtilities.invokeLater(new Runnable() {
+                    @Override
+                    public void run() {
+                        hotkeyField.setText(hotkey);
+                        cleanup();
+                        captureDialog.dispose();
+                    }
+                });
+
+                return true;
+            }
+
+            private void cleanup() {
+                kfm.removeKeyEventDispatcher(this);
+            }
+        };
+
+        kfm.addKeyEventDispatcher(dispatcher);
+
+        // 确保对话框关闭时移除 dispatcher（防止泄漏）
+        captureDialog.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosed(java.awt.event.WindowEvent e) {
+                kfm.removeKeyEventDispatcher(dispatcher);
+            }
+        });
+
+        captureDialog.setVisible(true);
     }
 
     /**

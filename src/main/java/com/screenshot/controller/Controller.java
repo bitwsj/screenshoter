@@ -5,6 +5,7 @@ import com.screenshot.config.ConfigManager;
 import com.screenshot.exception.ControllerException;
 import com.screenshot.exception.ScreenshotException;
 import com.screenshot.engine.ScreenshotEngine;
+import com.screenshot.hotkey.GlobalHotkeyManager;
 import com.screenshot.scheduler.Archiver;
 import com.screenshot.scheduler.Scheduler;
 import com.screenshot.tray.TrayManager;
@@ -46,6 +47,9 @@ public class Controller implements TrayManager.TrayCallback {
     private ScheduledExecutorService archiveExecutor;
     private ScheduledFuture<?> archiveFuture;
 
+    /** 全局热键管理器 */
+    private GlobalHotkeyManager hotkeyManager;
+
     /**
      * 创建控制器
      */
@@ -70,6 +74,9 @@ public class Controller implements TrayManager.TrayCallback {
 
             archiver = new Archiver();
             archiveExecutor = Executors.newSingleThreadScheduledExecutor();
+
+            // 初始化全局热键管理器
+            initHotkey(config);
 
             logger.info("控制器初始化成功");
 
@@ -220,6 +227,9 @@ public class Controller implements TrayManager.TrayCallback {
                 newConfig.getIdleThreshold()
             );
 
+            // 更新热键
+            updateHotkey(newConfig);
+
             // 如果正在运行，重启归档任务以应用新配置
             if (state.isRunning()) {
                 startArchiveTask();
@@ -246,6 +256,13 @@ public class Controller implements TrayManager.TrayCallback {
             configCopy.setImageFormat(state.getConfig().getImageFormat());
             configCopy.setArchiveEnabled(state.getConfig().isArchiveEnabled());
             configCopy.setArchiveTime(state.getConfig().getArchiveTime());
+            configCopy.setHotkeyEnabled(state.getConfig().isHotkeyEnabled());
+            configCopy.setHotkey(state.getConfig().getHotkey());
+
+            // 打开设置前注销全局热键，避免录制快捷键时触发截图
+            if (hotkeyManager != null) {
+                hotkeyManager.unregister();
+            }
 
             SettingsDialog dialog = new SettingsDialog(null, configCopy);
             dialog.setVisible(true);
@@ -258,10 +275,19 @@ public class Controller implements TrayManager.TrayCallback {
                     "配置已保存",
                     "成功",
                     JOptionPane.INFORMATION_MESSAGE);
+            } else {
+                // 用户取消，恢复原来的热键注册
+                if (hotkeyManager != null) {
+                    updateHotkey(state.getConfig());
+                }
             }
 
         } catch (Exception e) {
             logger.error("打开设置界面失败", e);
+            // 异常时也尝试恢复热键
+            if (hotkeyManager != null) {
+                updateHotkey(state.getConfig());
+            }
             JOptionPane.showMessageDialog(null,
                 "打开设置失败: " + e.getMessage(),
                 "错误",
@@ -276,6 +302,11 @@ public class Controller implements TrayManager.TrayCallback {
         logger.info("退出程序");
         stopCapture();
         scheduler.shutdown();
+
+        // 关闭热键管理器
+        if (hotkeyManager != null) {
+            hotkeyManager.shutdown();
+        }
 
         // 关闭归档调度器
         stopArchiveTask();
@@ -302,6 +333,73 @@ public class Controller implements TrayManager.TrayCallback {
 
     public AppState getState() {
         return state;
+    }
+
+    // ========== 热键管理 ==========
+
+    /**
+     * 初始化全局热键管理器
+     *
+     * @param config 当前配置
+     */
+    private void initHotkey(AppConfig config) {
+        hotkeyManager = new GlobalHotkeyManager();
+
+        // 设置热键回调：任何状态下按快捷键立即截图
+        hotkeyManager.setCallback(new GlobalHotkeyManager.HotkeyCallback() {
+            @Override
+            public void onHotkeyPressed() {
+                try {
+                    logger.info("热键触发手动截图");
+                    screenshotEngine.capture();
+                } catch (ScreenshotException e) {
+                    logger.error("热键截图失败: {}", e.getMessage());
+                }
+            }
+        });
+
+        // 按配置注册热键
+        if (config.isHotkeyEnabled() && config.getHotkey() != null) {
+            boolean ok = hotkeyManager.register(config.getHotkey());
+            if (!ok) {
+                logger.warn("全局热键 {} 注册失败，可能已被其他程序占用", config.getHotkey());
+                SwingUtilities.invokeLater(new Runnable() {
+                    @Override
+                    public void run() {
+                        JOptionPane.showMessageDialog(null,
+                            "全局热键 " + config.getHotkey() + " 注册失败，\n可能已被其他程序占用。\n请在设置中更换快捷键。",
+                            "热键注册失败",
+                            JOptionPane.WARNING_MESSAGE);
+                    }
+                });
+            }
+        }
+    }
+
+    /**
+     * 更新热键配置（配置变更时调用）
+     *
+     * @param config 新配置
+     */
+    private void updateHotkey(AppConfig config) {
+        if (config.isHotkeyEnabled() && config.getHotkey() != null) {
+            boolean ok = hotkeyManager.register(config.getHotkey());
+            if (!ok) {
+                logger.warn("全局热键 {} 注册失败，可能已被其他程序占用", config.getHotkey());
+                SwingUtilities.invokeLater(new Runnable() {
+                    @Override
+                    public void run() {
+                        JOptionPane.showMessageDialog(null,
+                            "全局热键 " + config.getHotkey() + " 注册失败，\n可能已被其他程序占用。\n请在设置中更换快捷键。",
+                            "热键注册失败",
+                            JOptionPane.WARNING_MESSAGE);
+                    }
+                });
+            }
+        } else {
+            hotkeyManager.unregister();
+            logger.info("全局热键已禁用");
+        }
     }
 
     // ========== TrayCallback接口实现 ==========

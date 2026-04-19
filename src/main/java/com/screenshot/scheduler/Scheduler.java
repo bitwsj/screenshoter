@@ -20,8 +20,12 @@ import java.util.concurrent.TimeUnit;
  * 2. 无状态变化时：
  *    - 按当前状态对应间隔正常执行截图
  *
+ * 线程安全：
+ * 所有对 executor 的调度操作（scheduleNext/cancel+reschedule）统一通过
+ * executor 线程串行执行，避免 Monitor 线程与 Executor 线程的并发竞态。
+ *
  * @author wsj
- * @version 2.0.0
+ * @version 2.1.0
  */
 public class Scheduler implements UserActivityMonitor.StateChangeListener {
     private static final Logger logger = LoggerFactory.getLogger(Scheduler.class);
@@ -33,7 +37,9 @@ public class Scheduler implements UserActivityMonitor.StateChangeListener {
     private volatile long busyIntervalSeconds;
 
     private ScheduledExecutorService executor;
-    private ScheduledFuture<?> scheduledFuture;
+
+    /** 当前等待中的截图任务，volatile 保证跨线程可见性 */
+    private volatile ScheduledFuture<?> scheduledFuture;
 
     /** 用户活动监控器 */
     private UserActivityMonitor activityMonitor;
@@ -90,6 +96,7 @@ public class Scheduler implements UserActivityMonitor.StateChangeListener {
 
     /**
      * 按当前状态间隔调度下一次截图
+     * 仅在 executor 线程上调用（或在 start 初始化时由调用方线程调用一次）
      */
     private void scheduleNext() {
         if (!running) {
@@ -127,26 +134,46 @@ public class Scheduler implements UserActivityMonitor.StateChangeListener {
 
     // ========== StateChangeListener 回调实现 ==========
 
+    /**
+     * 状态切换回调（由 ActivityMonitor 的 daemon 线程调用）
+     *
+     * 关键设计：将 cancel + 截图 + 重新调度 操作提交到 executor 执行，
+     * 确保与 executor 线程上正在运行的 scheduleNext() 串行化，
+     * 避免并发产生孤儿任务。
+     */
     @Override
     public void onStateChanged(boolean nowIdle) {
         if (!running) {
             return;
         }
 
-        // 取消当前等待中的截图任务
-        if (scheduledFuture != null) {
-            scheduledFuture.cancel(false);
-            scheduledFuture = null;
-        }
+        logger.info("检测到状态切换 → {}，提交重调度任务到执行器",
+                nowIdle ? "空闲" : "忙碌");
 
-        // 状态切换时立即截图
-        logger.info("状态切换触发立即截图，新状态: {}，后续间隔: {}秒",
-                nowIdle ? "空闲" : "忙碌",
-                nowIdle ? idleIntervalSeconds : busyIntervalSeconds);
-        executeScreenshot();
+        // 提交到 executor 线程执行，保证与 scheduleNext() 串行
+        executor.submit(new Runnable() {
+            @Override
+            public void run() {
+                if (!running) {
+                    return;
+                }
 
-        // 按新状态间隔重新调度
-        scheduleNext();
+                // 取消当前等待中的截图任务
+                if (scheduledFuture != null) {
+                    scheduledFuture.cancel(false);
+                    scheduledFuture = null;
+                }
+
+                // 状态切换时立即截图
+                logger.info("状态切换触发立即截图，新状态: {}，后续间隔: {}秒",
+                        nowIdle ? "空闲" : "忙碌",
+                        nowIdle ? idleIntervalSeconds : busyIntervalSeconds);
+                executeScreenshot();
+
+                // 按新状态间隔重新调度
+                scheduleNext();
+            }
+        });
     }
 
     /**
