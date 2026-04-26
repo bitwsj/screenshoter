@@ -1,6 +1,6 @@
 # Windows Screenshoter
 
-一个轻量级的 Windows 定时截图工具，通过系统托盘静默运行。支持根据键鼠活动自动切换空闲/忙碌状态并调整截图频率，每日自动按日期归档截图文件。
+一个轻量级的 Windows 定时截图工具，通过系统托盘静默运行。支持根据键鼠活动自动切换空闲/忙碌状态并调整截图频率，全局快捷键手动截图，每日自动按日期归档截图文件。
 
 ## 功能特性
 
@@ -8,6 +8,7 @@
   - 检测到键鼠操作 → 立即切换忙碌，按忙碌间隔截图
   - 无操作超过阈值 → 切换空闲，按空闲间隔截图
   - 状态切换时立即截图，无延迟响应
+- **全局快捷键截图** — 通过 Windows RegisterHotKey API 注册系统级热键，任何状态下按快捷键立即截图，快捷键可在设置中自定义（支持 Ctrl/Alt/Shift/Win + A-Z/0-9/F1-F12）
 - **每日自动归档** — 定时将前一天的截图移入 `YYYY-MM-DD` 日期子目录
 - **系统托盘运行** — 最小化到托盘，右键菜单控制启停和设置
 - **图形化设置界面** — 所有参数均可通过设置对话框配置
@@ -36,6 +37,7 @@
 | 截图 | java.awt.Robot |
 | 系统托盘 | java.awt.SystemTray |
 | 空闲检测 | JNA → Windows GetLastInputInfo API |
+| 全局热键 | JNA → Windows RegisterHotKey API |
 | 配置管理 | Jackson (JSON) |
 | 调度 | ScheduledExecutorService（事件驱动 + 自调度） |
 | 日志 | SLF4J + Logback |
@@ -59,6 +61,8 @@ src/main/java/com/screenshot/
 │   ├── Scheduler.java                 # 调度器（事件驱动，状态切换回调）
 │   ├── UserActivityMonitor.java       # 用户活动监控（JNA + 后台线程）
 │   └── Archiver.java                  # 每日归档器
+├── hotkey/
+│   └── GlobalHotkeyManager.java       # 全局热键管理（JNA + Windows 消息循环）
 ├── tray/
 │   └── TrayManager.java               # 系统托盘管理
 ├── ui/
@@ -96,6 +100,8 @@ java -jar target/screenshoter-1.0.0.jar
   "idle_interval": 300,
   "busy_interval": 60,
   "idle_threshold": 120,
+  "hotkey_enabled": true,
+  "hotkey": "Ctrl+Alt+S",
   "archive_enabled": true,
   "archive_time": "00:30",
   "save_path": "C:\\Users\\xxx\\AutoScreenshot",
@@ -108,6 +114,8 @@ java -jar target/screenshoter-1.0.0.jar
 | `idle_interval` | 空闲时段截图间隔（秒） | 1-3600 | 300（5分钟） |
 | `busy_interval` | 忙碌时段截图间隔（秒） | 1-3600 | 60（1分钟） |
 | `idle_threshold` | 空闲判定阈值（秒），无键鼠操作超过此时间判定为空闲 | 10-3600 | 120（2分钟） |
+| `hotkey_enabled` | 是否启用全局快捷键手动截图 | true/false | true |
+| `hotkey` | 快捷键组合（修饰键+按键） | Ctrl/Alt/Shift/Win + A-Z/0-9/F1-F12 | "Ctrl+Alt+S" |
 | `archive_enabled` | 是否启用每日自动归档 | true/false | true |
 | `archive_time` | 归档执行时间（HH:mm） | 00:00-23:59 | "00:30" |
 | `save_path` | 截图保存路径 | 有效路径 | ./screenshots |
@@ -146,6 +154,10 @@ wsj
 
 ## 版本历史
 
+- **v2.1.0** (2026-04-20)
+  - 实现全局快捷键手动截图（Windows RegisterHotKey API）
+  - 设置界面支持快捷键录制和自定义
+  - 修复调度器竞态条件导致空闲状态持续忙碌间隔截图的问题
 - **v2.0.0** (2026-04-18)
   - 实现空闲/忙碌双时段智能截图频率
   - 实现事件驱动调度模型（JNA 检测键鼠活动）
